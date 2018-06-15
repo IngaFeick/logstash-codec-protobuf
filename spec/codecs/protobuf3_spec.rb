@@ -114,16 +114,10 @@ describe LogStash::Codecs::Protobuf do
         plugin_4.register      
     end
 
-    it "should return an event from protobuf encoded data with nested classes" do
+    it "should decode a pbdns message" do
     
-
-      pbdns_message_class = Google::Protobuf::DescriptorPool.generated_pool.lookup("PBDNSMessage").msgclass
-      dns_question_class = Google::Protobuf::DescriptorPool.generated_pool.lookup("PBDNSMessage.DNSQuestion").msgclass
-      dns_response_class = Google::Protobuf::DescriptorPool.generated_pool.lookup("PBDNSMessage.DNSResponse").msgclass
-      dns_rr_class       = Google::Protobuf::DescriptorPool.generated_pool.lookup("PBDNSMessage.DNSResponse.DNSRR").msgclass
-
       dns_question_data = {:qName => "Foo", :qType => 12345, :qClass => 67890 }
-      dns_question_object = dns_question_class.new(dns_question_data)
+      dns_question_object = PBDNSMessage::DNSQuestion.new(dns_question_data)
 
       dns_response_data = {:rcode => 12345, :appliedPolicy => "baz", :tags => ["a","b","c"], 
         :queryTimeSec => 123, :queryTimeUsec => 456, 
@@ -134,8 +128,8 @@ describe LogStash::Codecs::Protobuf do
         {:name => "def", :type => 19000, :class => 18000, :ttl => 120, :rdata => "1300"}
       ]
 
-      dns_response_data[:rrs] = dns_rr_data.map { | d | d = dns_rr_class.new(d) }
-      dns_response_object = dns_response_class.new(dns_response_data)
+      dns_response_data[:rrs] = dns_rr_data.map { | d | d = PBDNSMessage::DNSResponse::DNSRR.new(d) }
+      dns_response_object = PBDNSMessage::DNSResponse.new(dns_response_data)
 
       pbdns_message_data = {
         # :UUID => '12345678901233456789', :TaskPingIPv4Result => ping_result_object
@@ -157,8 +151,8 @@ describe LogStash::Codecs::Protobuf do
         :initialRequestId => "20",
         :deviceId => "21",
         }
-      pbdns_message_object = pbdns_message_class.new(pbdns_message_data)
-      bin = pbdns_message_class.encode(pbdns_message_object)
+      pbdns_message_object = PBDNSMessage.new(pbdns_message_data)
+      bin = PBDNSMessage.encode(pbdns_message_object)
       plugin_4.decode(bin) do |event|
         
         ['messageId', 'serverIdentity','from','to','inBytes','timeUsec','timeSec','id', 'originalRequestorSubnet', 'requestorId' ,'initialRequestId','deviceIdf'].each { |n|  
@@ -181,10 +175,46 @@ describe LogStash::Codecs::Protobuf do
           ['name', 'type','class','ttl','rdata'].each { |n|   expect(found[n]).to eq(data[n.to_sym])   }
         }
 
-      end
+      end # do event
+
+
+
+    
+
+
     end # it
 
   end # context 
+  context "#test4b_pb3" do
+
+    #### Test case 4b: decode PBDNSMessage from the binary data mentioned in https://github.com/logstash-plugins/logstash-codec-protobuf/issues/15 ####################################################################################################################
+    let(:plugin_4b) { LogStash::Codecs::Protobuf.new("class_name" => "PBDNSMessage", "include_path" => [pb_include_path + '/pb3/dnsmessage_pb.rb'], "protobuf_version" => 3)  }
+    before do
+        plugin_4b.register      
+    end
+
+    it "should decode a pbdns message" do
+    
+      data_as_byte_string = "08021210c398556ac5fb48c2b68a7d09b87f5e9e2001280132040a1622293a040a160263403448838bb5d80550908f125885a60162190a1365782d362e6f78616d2e696e7465726e616c2e100118016a30080012220a1365782d362e6f78616d2e696e7465726e616c2e1001180120b0092a040a16080a28838bb5d80530ed8e127a008a0100"
+
+      bin = hex_to_bin(data_as_byte_string)
+      plugin_4b.decode(bin) do |event|
+        expect(event.get("socketFamily") ).to eq("INET" )
+        expect(event.get("socketProtocol") ).to eq("UDP" )
+        expect(event.get("inBytes") ).to eq(52 )
+        # TODO add expectations
+
+      end # do event
+
+
+
+    
+
+
+    end # it
+
+  end # context 
+
 
   context "#test5_pb3" do
 
@@ -278,3 +308,7 @@ describe LogStash::Codecs::Protobuf do
   end # context #encodePB3
 
 end # describe
+
+def hex_to_bin(s)
+ s.scan(/../).map { |x| x.hex.chr }.join
+end
