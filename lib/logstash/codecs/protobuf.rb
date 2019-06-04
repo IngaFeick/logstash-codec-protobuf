@@ -101,7 +101,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
   #
   # pb3
   #   ├── header
-  #   │   └── header_pb.rb
+  #   │   └── header_pb.rb
   #   ├── messageA_pb.rb
   #
   # In this case `messageA_pb.rb` has an embedded message from `header/header_pb.rb`.
@@ -257,23 +257,24 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
   end
 
   def pb3_encode_wrapper(event)
-    data = pb3_encode(event.to_hash, @class_name)
+    e = event.to_hash
+    @logger.warn("Encode wrapper: Class name #{@class_name} and event #{e}") # TODO remove
+    data = pb3_encode(e, @class_name)
+    @logger.warn("Data prepared.") # TODO remove
     pb_obj = @pb_builder.new(data)
     @pb_builder.encode(pb_obj)
   rescue ArgumentError => e
     k = event.to_hash.keys.join(", ")
-    @logger.debug("Encoding error 2. Probably mismatching protobuf definition. Required fields in the protobuf definition are: #{k} and the timestamp field name must not include an @.")
+    @logger.warn("Encoding error 2. Probably mismatching protobuf definition. Required fields in the protobuf definition are: #{k} and the timestamp field name must not include an @.")
     raise e
   rescue => e
-    @logger.debug("Couldn't generate protobuf: #{e.inspect}")
+    @logger.warn("Couldn't generate protobuf: #{e.inspect}")
     raise e
   end
 
 
   def pb3_encode(datahash, class_name)
     if datahash.is_a?(::Hash)
-
-
 
       # Preparation: the data cannot be encoded until certain criteria are met:
       # 1) remove @ signs from keys.
@@ -341,10 +342,10 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     msg = @pb_builder.new(data)
     msg.serialize_to_string
   rescue NoMethodError => e
-    @logger.debug("Encoding error 2. Probably mismatching protobuf definition. Required fields in the protobuf definition are: " + event.to_hash.keys.join(", ") + " and the timestamp field name must not include a @. ")
+    @logger.warn("Encoding error 2. Probably mismatching protobuf definition. Required fields in the protobuf definition are: " + event.to_hash.keys.join(", ") + " and the timestamp field name must not include a @. ")
     raise e
   rescue => e
-    @logger.debug("Encoding error 1: #{e.inspect}")
+    @logger.warn("Encoding error 1: #{e.inspect}")
     raise e
   end
 
