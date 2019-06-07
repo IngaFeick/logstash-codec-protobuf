@@ -278,7 +278,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     mismatches = []
     data.each do |key, value|
       actual_type = value.class
-      expected_type = pb3_get_expected_type(key, key_prefix) # TODO implement key for nested objects
+      expected_type = pb3_get_expected_type(key)
       is_mismatch = case expected_type
       when Google::Protobuf::RepeatedField
         actual_type != Hash
@@ -287,8 +287,8 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
       else
         expected_type != actual_type
       end # case expected_type
-      puts "Type of #{key} is #{actual_type}. Expected type is: #{expected_type}. Mismatch: #{is_mismatch}" # TODO remove
       if is_mismatch
+        puts "Type of #{key_prefix}#{key}: #{actual_type}. Expected type is: #{expected_type}. Mismatch: #{is_mismatch}" # TODO remove
         mismatches << {"key" => "#{key_prefix}#{key}", "actual_type" => actual_type, "expected_type" => expected_type}
       end # if
 
@@ -296,10 +296,12 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
         case expected_type
         when Google::Protobuf::RepeatedField
           value.each_with_index  do | v, i |
+            puts "Array element #{i}" # TODO remove
             recursive_mismatches = pb3_get_type_mismatches(v, key_prefix + key + "." + i + ".")
             mismatches << recursive_mismatches
           end # do
         when NilClass
+          puts "Nested object"
           recursive_mismatches = pb3_get_type_mismatches(value, key_prefix + key + ".")
           mismatches << recursive_mismatches
         end # case
