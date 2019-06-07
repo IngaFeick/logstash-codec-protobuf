@@ -222,9 +222,9 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
 
   def encode(event)
     if @protobuf_version == 3
-      protobytes = pb3_encode_wrapper(event)
+      protobytes = pb3_encode(event)
     else
-      protobytes = pb2_encode_wrapper(event)
+      protobytes = pb2_encode(event)
     end
      @on_event.call(event, protobytes)
   end # def encode
@@ -256,10 +256,10 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     result
   end
 
-  def pb3_encode_wrapper(event)
+  def pb3_encode(event)
     e = event.to_hash
     @logger.warn("Encode wrapper: Class name #{@class_name} and event #{e}") # TODO remove
-    data = pb3_encode(e, @class_name)
+    data = pb3_prepare_for_encoding(e, @class_name)
     @logger.warn("Data prepared.") # TODO remove
     pb_obj = @pb_builder.new(data)
     @pb_builder.encode(pb_obj)
@@ -273,7 +273,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
   end
 
 
-  def pb3_encode(datahash, class_name)
+  def pb3_prepare_for_encoding(datahash, class_name)
     if datahash.is_a?(::Hash)
 
       # Preparation: the data cannot be encoded until certain criteria are met:
@@ -293,10 +293,10 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
                 # make this field an array/list of protobuf objects
                 # value is a list of hashed complex objects, each of which needs to be protobuffed and
                 # put back into the list.
-                original_value.map { |x| pb3_encode(x, class_name) }
+                original_value.map { |x| pb3_prepare_for_encoding(x, class_name) }
                 original_value
               else
-                r = pb3_encode(original_value, class_name)
+                r = pb3_prepare_for_encoding(original_value, class_name)
                 builder = Google::Protobuf::DescriptorPool.generated_pool.lookup(class_name).msgclass
                 builder.new(r)
               end # if is array
@@ -313,7 +313,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
             original_value = datahash[key]
             datahash[key] = case original_value
             when ::Array
-              original_value.map { |x| pb3_encode(x, class_name) }
+              original_value.map { |x| pb3_prepare_for_encoding(x, class_name) }
               original_value
             when Fixnum
               original_value # integers will be automatically converted into enum
@@ -337,8 +337,8 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     datahash
   end
 
-  def pb2_encode_wrapper(event)
-    data = pb2_encode(event.to_hash, @class_name)
+  def pb2_encode(event)
+    data = pb2_prepare_for_encoding(event.to_hash, @class_name)
     msg = @pb_builder.new(data)
     msg.serialize_to_string
   rescue NoMethodError => e
@@ -351,7 +351,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
 
 
 
-  def pb2_encode(datahash, class_name)
+  def pb2_prepare_for_encoding(datahash, class_name)
     if datahash.is_a?(::Hash)
       # Preparation: the data cannot be encoded until certain criteria are met:
       # 1) remove @ signs from keys.
@@ -369,11 +369,11 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
                 # make this field an array/list of protobuf objects
                 # value is a list of hashed complex objects, each of which needs to be protobuffed and
                 # put back into the list.
-                original_value.map { |x| pb2_encode(x, c) }
+                original_value.map { |x| pb2_prepare_for_encoding(x, c) }
                 original_value
               else
                 proto_obj = pb2_create_instance(c)
-                proto_obj.new(pb2_encode(original_value, c)) # this line is reached in the colourtest for an enum. Enums should not be instantiated. Should enums even be in the messageclasses? I dont think so! TODO bug
+                proto_obj.new(pb2_prepare_for_encoding(original_value, c)) # this line is reached in the colourtest for an enum. Enums should not be instantiated. Should enums even be in the messageclasses? I dont think so! TODO bug
               end # if is array
           end # if datahash_include
         end # do
