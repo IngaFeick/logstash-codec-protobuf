@@ -258,9 +258,9 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
 
   def pb3_encode(event)
     e = event.to_hash
-    @logger.warn("Encode wrapper: Class name #{@class_name} and event #{e}") # TODO remove
+    #@logger.warn("Encode wrapper: Class name #{@class_name} and event #{e}") # TODO remove
     data = pb3_prepare_for_encoding(e, @class_name)
-    @logger.warn("Data prepared.") # TODO remove
+    #@logger.warn("Data prepared.") # TODO remove
     pb_obj = @pb_builder.new(data)
     @pb_builder.encode(pb_obj)
   rescue ArgumentError => e
@@ -268,22 +268,42 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     @logger.warn("Protobuf encoding error 1: Argument error (#{e.inspect}). Reason: probably mismatching protobuf definition. \
       Required fields in the protobuf definition are: #{k} and fields must not begin with @ sign. The event has been discarded.")
   rescue TypeError => e
-    mismatches = pb3_get_type_mismatches(data)
+    mismatches = pb3_get_type_mismatches(data, "")
     @logger.warn("Protobuf encoding error 2: Type error (#{e.inspect}). The event has been discarded. Type mismatches: #{mismatches}")
   rescue => e
     @logger.warn("Protobuf encoding error 3: #{e.inspect}. Event discarded. Input data: #{event.to_hash}. The event has been discarded.")
   end
 
-  def pb3_get_type_mismatches(data)
+  def pb3_get_type_mismatches(data, key_prefix)
     mismatches = []
     data.each do |key, value|
       actual_type = value.class
-      expected_type = pb3_get_expected_type(key)
-      puts "Type of #{key} is #{actual_type}. Expected type is: #{expected_type}"
-      if expected_type != actual_type
-        mismatches << {"key" => key, "actual_type" => actual_type, "expected_type" => expected_type}
+      expected_type = pb3_get_expected_type(key, key_prefix) # TODO implement key for nested objects
+      is_mismatch = case expected_type
+      when Google::Protobuf::RepeatedField
+        actual_type != Hash
+      when NilClass
+        false # Nested object, will be checked in recursion
+      else
+        expected_type != actual_type
+      end # case expected_type
+      puts "Type of #{key} is #{actual_type}. Expected type is: #{expected_type}. Mismatch: #{is_mismatch}" # TODO remove
+      if is_mismatch
+        mismatches << {"key" => "#{key_prefix}#{key}", "actual_type" => actual_type, "expected_type" => expected_type}
       end # if
-      # TODO find out if this needs to recurse over complex fields/hashes
+
+      if actual_type == Hash
+        case expected_type
+        when Google::Protobuf::RepeatedField
+          value.each_with_index  do | v, i |
+            recursive_mismatches = pb3_get_type_mismatches(v, key_prefix + key + "." + i + ".")
+            mismatches << recursive_mismatches
+          end # do
+        when NilClass
+          recursive_mismatches = pb3_get_type_mismatches(value, key_prefix + key + ".")
+          mismatches << recursive_mismatches
+        end # case
+      end # if actual_type == Hash
     end # data.each
     mismatches
   end
