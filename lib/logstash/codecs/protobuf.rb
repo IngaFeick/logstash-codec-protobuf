@@ -265,11 +265,33 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     @pb_builder.encode(pb_obj)
   rescue ArgumentError => e
     k = event.to_hash.keys.join(", ")
-    @logger.warn("Encoding error 2. Probably mismatching protobuf definition. Required fields in the protobuf definition are: #{k} and the timestamp field name must not include an @.")
-    raise e
+    @logger.warn("Protobuf encoding error 1: Argument error (#{e.inspect}). Reason: probably mismatching protobuf definition. \
+      Required fields in the protobuf definition are: #{k} and fields must not begin with @ sign. The event has been discarded.")
+  rescue TypeError => e
+    mismatches = pb3_get_type_mismatches(data)
+    @logger.warn("Protobuf encoding error 2: Type error (#{e.inspect}). The event has been discarded. Type mismatches: #{mismatches}")
   rescue => e
-    @logger.warn("Couldn't generate protobuf: #{e.inspect}")
-    raise e
+    @logger.warn("Protobuf encoding error 3: #{e.inspect}. Event discarded. Input data: #{event.to_hash}. The event has been discarded.")
+  end
+
+  def pb3_get_type_mismatches(data)
+    mismatches = []
+    data.each do |key, value|
+      actual_type = value.class
+      expected_type = pb3_get_expected_type(key)
+      puts "Type of #{key} is #{actual_type}. Expected type is: #{expected_type}"
+      if expected_type != actual_type
+        mismatches << {"key" => key, "actual_type" => actual_type, "expected_type" => expected_type}
+      end # if
+      # TODO find out if this needs to recurse over complex fields/hashes
+    end # data.each
+    mismatches
+  end
+
+  def pb3_get_expected_type(key)
+    pb_obj = @pb_builder.new({})
+    v = pb_obj.send(key)
+    v.class
   end
 
 
