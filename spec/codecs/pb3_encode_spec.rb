@@ -145,7 +145,8 @@ describe LogStash::Codecs::Protobuf do
         pb_builder = Google::Protobuf::DescriptorPool.generated_pool.lookup("something.rum_akamai.ProtoAkamaiRum").msgclass
         decoded_data = pb_builder.decode(data)
         # expect(true).to eq(false) # Force failure to check if this test is being executed
-        expect(decoded_data.user_agent.minor ).to eq(event.get("user_agent")["minor"] )
+        expect(decoded_data.user_agent.minor ).to eq(event.get("user_agent")["minor"] ) # only test fields which have not been converted
+        # if this ^ works, then the convertion works aswell because otherwise there would have been an exception
       end
       subject.encode(event)
     end # it
