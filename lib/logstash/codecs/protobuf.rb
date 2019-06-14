@@ -178,7 +178,6 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     end
 
     @class_file = "#{@protobuf_root_directory}/#{@class_file}" unless (Pathname.new @class_file).absolute? or @class_file.empty?
-
     # exclusive access while loading protobuf definitions
     Google::Protobuf::DescriptorPool.with_lock.synchronize do
       # load from `class_file`
@@ -261,26 +260,22 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
   end
 
   def pb3_encode(event)
-    data = event.to_hash
+    datahash = event.to_hash
     is_recursive_call = !event.get('tags').nil? and event.get('tags').include? @pb3_typeconversion_tag
     if is_recursive_call
-      # remove the tag that we added to the event because
-      # the protobuf definition might not have a field for tags
-      data['tags'].delete(@pb3_typeconversion_tag)
-      if data['tags'].length == 0
-        data.delete('tags')
-      end
+      datahash = pb3_remove_typeconversion_tag(datahash)
     end
-
-    data = pb3_prepare_for_encoding(data, @class_name)
-    pb_obj = @pb_builder.new(data)
+    datahash = pb3_prepare_for_encoding(datahash, @class_name)
+    puts "Data: #{datahash}"
+    pb_obj = @pb_builder.new(datahash)
     @pb_builder.encode(pb_obj)
   rescue ArgumentError => e
     k = event.to_hash.keys.join(", ")
     @logger.warn("Protobuf encoding error 1: Argument error (#{e.inspect}). Reason: probably mismatching protobuf definition. \
       Required fields in the protobuf definition are: #{k} and fields must not begin with @ sign. The event has been discarded.")
   rescue TypeError => e
-    mismatches = pb3_get_type_mismatches(data, "", @class_name)
+    mismatches = pb3_get_type_mismatches(datahash, "", @class_name)
+    puts "Mismatches: #{mismatches}" # TODO
     @logger.warn("Protobuf encoding error 2: Type error (#{e.inspect}). The event has been discarded. Type mismatches: #{mismatches}.")
     if @pb3_encoder_autoconvert_types
       if !is_recursive_call
@@ -296,13 +291,26 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
 
   def pb3_get_type_mismatches(data, key_prefix, pb_class)
     mismatches = []
+    data = data.to_hash # TODO remove when the class detection for hashes has been fixed
     if data.is_a? ::Hash
         data.each do |key, value|
             expected_type = pb3_get_expected_type(key, pb_class)
             mismatches.concat(pb3_compare_datatypes(value, key, key_prefix, pb_class, expected_type))
         end # data.each
+    else
+      puts "WEatnrining: i am not a hashi #{data.class}"
     end
     mismatches
+  end
+
+  def pb3_remove_typeconversion_tag(data)
+    # remove the tag that we added to the event because
+    # the protobuf definition might not have a field for tags
+    data['tags'].delete(@pb3_typeconversion_tag)
+    if data['tags'].length == 0
+      data.delete('tags')
+    end
+    data
   end
 
   def pb3_get_expected_type(key, pb_class)
@@ -322,35 +330,37 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
 
   def pb3_compare_datatypes(value, key, key_prefix, pb_class, expected_type)
     mismatches = []
-    case value
-    when ::Hash # nested object
+
+    if value.nil?
+      is_mismatch = false
+    else
+      case value
+      when ::Hash, Hash, Google::Protobuf::MessageExts #Something::RumAkamai::ProtoAkamai2Rum::ProtoGeoLocation # nested object TODO this is deffo broken
+        is_mismatch = false
         descriptor = Google::Protobuf::DescriptorPool.generated_pool.lookup(pb_class).lookup(key)
         if descriptor.subtype != nil
-            class_of_nested_object = pb3_get_descriptorpool_name(descriptor.subtype.msgclass)
-            new_prefix = "#{key}."
-            recursive_mismatches = pb3_get_type_mismatches(value, new_prefix, class_of_nested_object)
-            mismatches.concat(recursive_mismatches)
-            is_mismatch = recursive_mismatches.any?
-        else
-            @logger.debug("Protobuf encoding error 4: Failed to look up subtype for key #{key}")
-            is_mismatch = false
+          class_of_nested_object = pb3_get_descriptorpool_name(descriptor.subtype.msgclass)
+          new_prefix = "#{key}."
+          recursive_mismatches = pb3_get_type_mismatches(value, new_prefix, class_of_nested_object)
+          mismatches.concat(recursive_mismatches)
         end
-    when ::Array
+      when ::Array, Array
         expected_type = pb3_get_expected_type(key, pb_class)
         is_mismatch = (expected_type != Google::Protobuf::RepeatedField)
         child_type = Google::Protobuf::DescriptorPool.generated_pool.lookup(pb_class).lookup(key).type
         value.each_with_index  do | v, i |
-            new_prefix = "#{key}."
-            recursive_mismatches = pb3_compare_datatypes(v, i.to_s, new_prefix, pb_class, child_type)
-            mismatches.concat(recursive_mismatches)
-            is_mismatch |= recursive_mismatches.any?
+          new_prefix = "#{key}."
+          recursive_mismatches = pb3_compare_datatypes(v, i.to_s, new_prefix, pb_class, child_type)
+          mismatches.concat(recursive_mismatches)
+          is_mismatch |= recursive_mismatches.any?
         end # do
-    else # is scalar data type
-       is_mismatch = ! pb3_is_scalar_datatype_match(expected_type, value.class)
-    end # if
+      else # is scalar data type
+        is_mismatch = ! pb3_is_scalar_datatype_match(expected_type, value.class)
+      end # if
+    end # if value.nil?
 
     if is_mismatch
-        mismatches << {"key" => "#{key_prefix}#{key}", "actual_type" => value.class, "expected_type" => expected_type}
+      mismatches << {"key" => "#{key_prefix}#{key}", "actual_type" => value.class, "expected_type" => expected_type, "value" => value}
     end
     mismatches
   end
@@ -363,16 +373,20 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
   end
 
   def pb3_is_scalar_datatype_match(expected_type, actual_type)
-    e = expected_type.to_s.downcase.to_sym
-    a = actual_type.to_s.downcase.to_sym
-    case e
-    # when :string, :integer
-    when :string
-        a == e
-    when :integer
-        a == e
-    when :float
-        a == :float || a == :integer
+    if expected_type == actual_type
+      true
+    else
+      e = expected_type.to_s.downcase.to_sym
+      a = actual_type.to_s.downcase.to_sym
+      case e
+      # when :string, :integer
+      when :string
+          a == e
+      when :integer
+          a == e
+      when :float
+          a == :float || a == :integer
+      end
     end
   end
 
@@ -452,13 +466,16 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
   def pb3_prepare_for_encoding(datahash, class_name)
     if datahash.is_a?(::Hash)
 
+      # 0) Remove empty fields.
+      datahash = datahash.select { |key, value| !value.nil? }
+
       # Preparation: the data cannot be encoded until certain criteria are met:
       # 1) remove @ signs from keys.
       # 2) convert timestamps and other objects to strings
       datahash = datahash.inject({}){|x,(k,v)| x[k.gsub(/@/,'').to_sym] = (should_convert_to_string?(v) ? v.to_s : v); x}
 
       # Check if any of the fields in this hash are protobuf classes and if so, create a builder for them.
-      meta = @metainfo_messageclasses[class_name]
+      meta = @metainfo_messageclasses[class_name] # TODO broken
       if meta
         meta.map do | (field_name,class_name) |
           key = field_name.to_sym
@@ -560,7 +577,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
 
 
   def should_convert_to_string?(v)
-    !(v.is_a?(::Fixnum) || v.is_a?(::Hash) || v.is_a?(::Array) || [true, false].include?(v))
+    !(v.is_a?(Integer) || v.is_a?(Float) || v.is_a?(::Hash) || v.is_a?(::Array) || [true, false].include?(v))
   end
 
 
