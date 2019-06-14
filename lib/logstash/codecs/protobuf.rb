@@ -452,7 +452,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
                     new_value = value.to_s
                 when "Float"
                     new_value = value.to_f
-                when "Boolean"
+                when "Boolean","TrueClass", "FalseClass"
                     new_value = value.to_s.downcase == "true"
                 end
                 if !new_value.nil?
