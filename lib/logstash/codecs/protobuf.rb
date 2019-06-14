@@ -226,9 +226,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
 
   def encode(event)
     if @protobuf_version == 3
-      puts "encode yes" # TODO
       protobytes = pb3_encode(event)
-      puts "encode done #{protobytes}" # TODO
     else
       protobytes = pb2_encode(event)
     end
@@ -263,48 +261,33 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
   end
 
   def pb3_encode(event)
-    puts "Helloooooh"
-
     data = event.to_hash
     is_recursive_call = !event.get('tags').nil? and event.get('tags').include? @pb3_typeconversion_tag
     if is_recursive_call
-      puts "is recursion"
       # remove the tag that we added to the event because
       # the protobuf definition might not have a field for tags
       data['tags'].delete(@pb3_typeconversion_tag)
       if data['tags'].length == 0
         data.delete('tags')
       end
-    else
-      puts "Original data: #{event.inspect}"
     end
 
     data = pb3_prepare_for_encoding(data, @class_name)
     pb_obj = @pb_builder.new(data)
-    puts "I made it so far #{data}" # TODO remove
-    r = @pb_builder.encode(pb_obj)
-    puts "bye #{r}"
-    r
+    @pb_builder.encode(pb_obj)
   rescue ArgumentError => e
-    puts "I has an ArgumentError #{e}"
     k = event.to_hash.keys.join(", ")
     @logger.warn("Protobuf encoding error 1: Argument error (#{e.inspect}). Reason: probably mismatching protobuf definition. \
       Required fields in the protobuf definition are: #{k} and fields must not begin with @ sign. The event has been discarded.")
   rescue TypeError => e
-    puts "has TypeError #{e}" # TODO
     mismatches = pb3_get_type_mismatches(data, "", @class_name)
-    puts "Mismatches: #{mismatches}"
     @logger.warn("Protobuf encoding error 2: Type error (#{e.inspect}). The event has been discarded. Type mismatches: #{mismatches}.")
     if @pb3_encoder_autoconvert_types
       if !is_recursive_call
         event = pb3_convert_mismatched_types(event, mismatches)
-        puts "Converted event: #{event.to_hash}"
         # Add a (temporary) tag to handle the recursion stop
         pb3_add_typeconversion_tag(event)
-        puts "Tagged event: #{event.to_hash}"
-        r = pb3_encode(event)
-        puts "Re-encoded #{r}"
-        r
+        pb3_encode(event)
       end
     end
   rescue => e
