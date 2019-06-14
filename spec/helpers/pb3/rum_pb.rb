@@ -55,7 +55,7 @@ Google::Protobuf::DescriptorPool.generated_pool.build do
     optional :lat, :float, 4
     optional :lon, :float, 5
     optional :netspeed, :string, 6
-    optional :org, :string, 7
+    optional :organisation, :string, 7
     optional :ovr, :bool, 8
     optional :postalcode, :string, 9
     optional :rg, :string, 10

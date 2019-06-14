@@ -89,14 +89,21 @@ describe LogStash::Codecs::Protobuf do
 
     #### Test case 3: encode nested protobuf ####################################################################################################################
 
-    require_relative '../helpers/pb3/rum_pb.rb'
 
     subject do
       next LogStash::Codecs::Protobuf.new("class_name" => "something.rum_akamai.ProtoAkamaiRum", "include_path" => [pb_include_path + '/pb3/rum_pb.rb' ], "protobuf_version" => 3)
     end
 
     event = LogStash::Event.new(
-    "user_agent"=>{"os"=>"Android OS", "family"=>"Chrome Mobile", "major"=>74, "mobile"=>"1", "minor"=>0, "manufacturer"=>"Samsung", "osversion"=>"8", "model"=>"Galaxy S7 Edge", "type"=>"Mobile", "raw"=>"Mozilla/5.0 (Linux; Android 8.0.0; SM-G935F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.157 Mobile Safari/537.36"}, "dom"=>{"script"=>65, "ln"=>2063, "ext"=>47}, "page_group"=>"SEO-Pages", "active_ctests"=>["1443703219", "1459869632", "1461246749", "1472826866", "25798", "27291", "32046", "35446", "38216", "39578", "40428", "40402", "42320", "42304", "43759", "42164", "42280", "42673", "44629", "44964", "45265", "45465", "38217", "45104", "45172", "45433", "39875", "45749", "45839", "45398", "45399", "46136", "46164", "46395", "46378", "46411", "46480", "46534", "46587", "42107", "46429", "46234", "46355", "46690", "46691", "46918", "46839", "46897", "46610", "46363", "46630", "46846", "46876", "45123", "46977", "47121", "47048", "46906"], "timestamp"=>"1559566982508", "geo"=>{"isp"=>"Telecom Italia Mobile", "lat"=>45.4643, "postalcode"=>"20123", "netspeed"=>"Cellular", "rg"=>"MI", "cc"=>"IT", "org"=>"Telecom Italia Mobile", "ovr"=>false, "city"=>"Milan", "lon"=>9.1895}, "header"=>{"sender_id"=>"0"}, "domain"=>"something.com", "url"=>"https://www.something.it/", "timers"=>{"tti"=>4544, "ttvr"=>3657, "fcp"=>2683, "ttfi"=>4280, "fid"=>31, "longtasks"=>2519, "t_resp"=>1748}
+      "user_agent"=>{"os"=>"Android OS", "family"=>"Chrome Mobile", "major"=>74, "mobile"=>"1", "minor"=>0, "manufacturer"=>"Samsung", "osversion"=>"8",
+          "model"=>"Galaxy S7 Edge", "type"=>"Mobile",
+          "raw"=>"Mozilla/5.0 (Linux; Android 8.0.0; SM-G935F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.157 Mobile Safari/537.36"},
+          "dom"=>{"script"=>65, "ln"=>2063, "ext"=>47}, "page_group"=>"SEO-Pages",
+          "active_ctests"=>["1443703219", "47121", "47048", "46906"], "timestamp"=>"1559566982508",
+          "geo"=>{"isp"=>"Telecom Italia Mobile", "lat"=>45.4643, "postalcode"=>"20123", "netspeed"=>"Cellular", "rg"=>"MI", "cc"=>"IT",
+            "organisation"=>"Telecom Italia Mobile", "ovr"=>false, "city"=>"Milan", "lon"=>9.1895},
+          "header"=>{"sender_id"=>"0"}, "domain"=>"something.com", "url"=>"https://www.something.it/",
+          "timers"=>{"tti"=>4544, "ttvr"=>3657, "fcp"=>2683, "ttfi"=>4280, "fid"=>31, "longtasks"=>2519, "t_resp"=>1748}
     )
 
     it "should return protobuf encoded data for testcase 3" do
@@ -118,23 +125,24 @@ describe LogStash::Codecs::Protobuf do
     end # it
   end # context #encodePB3-c
 
+
   context "encodePB3-d" do
 
     #### Test case 3: autoconvert data types ####################################################################################################################
 
-    require_relative '../helpers/pb3/rum_pb.rb'
 
     subject do
-      next LogStash::Codecs::Protobuf.new("class_name" => "something.rum_akamai.ProtoAkamaiRum",
+      next LogStash::Codecs::Protobuf.new("class_name" => "something.rum_akamai.ProtoAkamai2Rum",
         "pb3_encoder_autoconvert_types" => true,
-        "include_path" => [pb_include_path + '/pb3/rum_pb.rb' ], "protobuf_version" => 3)
+        "include_path" => [pb_include_path + '/pb3/rum2_pb.rb' ], "protobuf_version" => 3)
     end
 
     event = LogStash::Event.new(
-      "user_agent"=>{"minor"=>0,"major"=>"74"}, # major should autoconvert to float
-      "dom"=>{"script"=>65, "ln"=>2063, "ext"=>47.0}, # ext should autoconvert to int
-      "geo"=>{"ovr"=>"false"}, # ovr should autoconvert to Boolean
-      "header"=>{"sender_id"=>1} # sender_id should autoconvert to string
+     # "user_agent"=>{"minor"=>0,"major"=>"74"}, # major should autoconvert to float
+     # "dom"=>{"script"=>nil, "ln"=>2063, "ext"=>47.0}, # ext should autoconvert to int. script being empty should be ignored.
+     "geo"=>{"ovr"=>"false"}, # ovr should autoconvert to Boolean
+    # "header"=>{"sender_id"=>1}, # sender_id should autoconvert to string
+     "domain" => "www"
     )
 
     it "should fix datatypes to match the protobuf definition" do
@@ -142,16 +150,51 @@ describe LogStash::Codecs::Protobuf do
       subject.on_event do |event, data|
         insist { data.is_a? String }
 
-        pb_builder = Google::Protobuf::DescriptorPool.generated_pool.lookup("something.rum_akamai.ProtoAkamaiRum").msgclass
+        pb_builder = Google::Protobuf::DescriptorPool.generated_pool.lookup("something.rum_akamai.ProtoAkamai2Rum").msgclass
         decoded_data = pb_builder.decode(data)
         # expect(true).to eq(false) # Force failure to check if this test is being executed
-        expect(decoded_data.user_agent.minor ).to eq(event.get("user_agent")["minor"] ) # only test fields which have not been converted
+
+        expect(decoded_data.domain ).to eq(event.get("domain") ) # only test fields which have not been converted
         # if this ^ works, then the convertion works aswell because otherwise there would have been an exception
       end
       subject.encode(event)
     end # it
 
   end # context #encodePB3-d
+
+
+context "encodePB3-e" do
+
+    #### Test case 4: handle nil data ####################################################################################################################
+
+
+
+    subject do
+      next LogStash::Codecs::Protobuf.new("class_name" => "something.rum_akamai.ProtoAkamai3Rum",
+        "pb3_encoder_autoconvert_types" => false,
+        "include_path" => [pb_include_path + '/pb3/rum3_pb.rb' ], "protobuf_version" => 3)
+    end
+
+    event = LogStash::Event.new(
+      "geo"=>{"organisation"=>"Jio", "rg"=>"DL", "netspeed"=>nil, "city"=>"New Delhi", "cc"=>"IN", "ovr"=>false, "postalcode"=>"110012", "isp"=>"Jio"}
+    )
+
+    it "should ignore empty fields" do
+
+      subject.on_event do |event, data|
+        insist { data.is_a? String }
+
+        pb_builder = Google::Protobuf::DescriptorPool.generated_pool.lookup("something.rum_akamai.ProtoAkamai3Rum").msgclass
+        decoded_data = pb_builder.decode(data)
+        expect(decoded_data.geo.organisation ).to eq(event.get("geo")["organisation"])
+        expect(decoded_data.geo.ovr ).to eq(event.get("geo")["ovr"])
+        expect(decoded_data.geo.city ).to eq(event.get("geo")["city"])
+        expect(decoded_data.geo.postalcode ).to eq(event.get("geo")["postalcode"])
+      end
+      subject.encode(event)
+    end # it
+
+  end # context #encodePB3-e
 
 
 end # describe
