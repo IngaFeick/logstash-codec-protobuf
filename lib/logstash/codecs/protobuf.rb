@@ -145,6 +145,9 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
   # To tolerate faulty messages that cannot be decoded, set this to false. Otherwise the pipeline will stop upon encountering a non decipherable message.
   config :stop_on_error, :validate => :boolean, :default => false, :required => false
 
+  # Instruct the encoder to attempt converting data types to match the protobuf definitions. Available only for protobuf version 3.
+  config :pb3_encoder_autoconvert_types, :validate => :boolean, :default => false, :required => false
+
   attr_reader :execution_context
 
   # id of the pipeline whose events you want to read from.
@@ -156,6 +159,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     @metainfo_messageclasses = {}
     @metainfo_enumclasses = {}
     @metainfo_pb2_enumlist = []
+    @pb3_typeconversion_tag = "_protobuf_type_converted"
 
     if @include_path.length > 0 and not class_file.strip.empty?
       raise LogStash::ConfigurationError, "Cannot use `include_path` and `class_file` at the same time"
@@ -257,65 +261,184 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
   end
 
   def pb3_encode(event)
-    e = event.to_hash
-    #@logger.warn("Encode wrapper: Class name #{@class_name} and event #{e}") # TODO remove
-    data = pb3_prepare_for_encoding(e, @class_name)
-    #@logger.warn("Data prepared.") # TODO remove
+    data = pb3_prepare_for_encoding(event.to_hash, @class_name)
     pb_obj = @pb_builder.new(data)
-    @pb_builder.encode(pb_obj)
+    puts "I made it so far" # TODO remove
+    r = @pb_builder.encode(pb_obj)
+    puts "Heello #{r}"
+    r
   rescue ArgumentError => e
     k = event.to_hash.keys.join(", ")
     @logger.warn("Protobuf encoding error 1: Argument error (#{e.inspect}). Reason: probably mismatching protobuf definition. \
       Required fields in the protobuf definition are: #{k} and fields must not begin with @ sign. The event has been discarded.")
   rescue TypeError => e
-    mismatches = pb3_get_type_mismatches(data, "")
-    @logger.warn("Protobuf encoding error 2: Type error (#{e.inspect}). The event has been discarded. Type mismatches: #{mismatches}")
+    mismatches = pb3_get_type_mismatches(data, "", @class_name)
+    @logger.warn("Protobuf encoding error 2: Type error (#{e.inspect}). The event has been discarded. Type mismatches: #{mismatches}.")
+    if @pb3_encoder_autoconvert_types
+      if event.get('tags').nil? or !event.get('tags').include? @pb3_typeconversion_tag
+        event = pb3_convert_mismatched_types(event, mismatches)
+        pb3_add_typeconversion_tag(event)
+
+        pb3_encode(event)
+      end
+    end
   rescue => e
     @logger.warn("Protobuf encoding error 3: #{e.inspect}. Event discarded. Input data: #{event.to_hash}. The event has been discarded.")
   end
 
-  def pb3_get_type_mismatches(data, key_prefix)
+  def pb3_get_type_mismatches(data, key_prefix, pb_class)
     mismatches = []
-    data.each do |key, value|
-      actual_type = value.class
-      expected_type = pb3_get_expected_type(key)
-      is_mismatch = case expected_type
-      when Google::Protobuf::RepeatedField
-        actual_type != Hash
-      when NilClass
-        false # Nested object, will be checked in recursion
-      else
-        expected_type != actual_type
-      end # case expected_type
-      if is_mismatch
-        puts "Type of #{key_prefix}#{key}: #{actual_type}. Expected type is: #{expected_type}. Mismatch: #{is_mismatch}" # TODO remove
-        mismatches << {"key" => "#{key_prefix}#{key}", "actual_type" => actual_type, "expected_type" => expected_type}
-      end # if
-
-      if actual_type == Hash
-        case expected_type
-        when Google::Protobuf::RepeatedField
-          value.each_with_index  do | v, i |
-            puts "Array element #{i}" # TODO remove
-            recursive_mismatches = pb3_get_type_mismatches(v, key_prefix + key + "." + i + ".")
-            mismatches << recursive_mismatches
-          end # do
-        when NilClass
-          puts "Nested object"
-          recursive_mismatches = pb3_get_type_mismatches(value, key_prefix + key + ".")
-          mismatches << recursive_mismatches
-        end # case
-      end # if actual_type == Hash
-    end # data.each
+    if data.is_a? ::Hash
+        data.each do |key, value|
+            expected_type = pb3_get_expected_type(key, pb_class)
+            mismatches.concat(pb3_compare_datatypes(value, key, key_prefix, pb_class, expected_type))
+        end # data.each
+    end
     mismatches
   end
 
-  def pb3_get_expected_type(key)
-    pb_obj = @pb_builder.new({})
-    v = pb_obj.send(key)
-    v.class
+  def pb3_get_expected_type(key, pb_class)
+    pb_descriptor = Google::Protobuf::DescriptorPool.generated_pool.lookup(pb_class)
+    if !pb_descriptor.nil?
+      pb_builder = pb_descriptor.msgclass
+      pb_obj = pb_builder.new({})
+      v = pb_obj.send(key)
+      if !v.nil?
+        v.class
+      end
+    else
+      @logger.debug("Protobuf class not found in DescriptorPool: #{pb_class}")
+      STDERR.write("Protobuf class not found in DescriptorPool: #{pb_class}") # TODO remove
+    end
   end
 
+  def pb3_compare_datatypes(value, key, key_prefix, pb_class, expected_type)
+    mismatches = []
+    case value
+    when ::Hash # nested object
+        descriptor = Google::Protobuf::DescriptorPool.generated_pool.lookup(pb_class).lookup(key)
+        if descriptor.subtype != nil
+            class_of_nested_object = pb3_get_descriptorpool_name(descriptor.subtype.msgclass)
+            puts "Key #{key} of class #{pb_class} has type #{class_of_nested_object}" # TODO remove
+            new_prefix = "#{key}."
+            recursive_mismatches = pb3_get_type_mismatches(value, new_prefix, class_of_nested_object)
+            mismatches.concat(recursive_mismatches)
+            is_mismatch = recursive_mismatches.any?
+        else
+            @logger.debug("Protobuf encoding error 4: Failed to look up subtype for key #{key}")
+            is_mismatch = false
+        end
+    when ::Array
+        expected_type = pb3_get_expected_type(key, pb_class)
+        is_mismatch = (expected_type != Google::Protobuf::RepeatedField)
+        child_type = Google::Protobuf::DescriptorPool.generated_pool.lookup(pb_class).lookup(key).type
+        value.each_with_index  do | v, i |
+            new_prefix = "#{key}."
+            recursive_mismatches = pb3_compare_datatypes(v, i.to_s, new_prefix, pb_class, child_type)
+            mismatches.concat(recursive_mismatches)
+            is_mismatch |= recursive_mismatches.any?
+        end # do
+    else # is scalar data type
+       is_mismatch = ! pb3_is_scalar_datatype_match(expected_type, value.class)
+    end # if
+
+    if is_mismatch
+        mismatches << {"key" => "#{key_prefix}#{key}", "actual_type" => value.class, "expected_type" => expected_type}
+    end
+    mismatches
+  end
+
+  def pb3_get_descriptorpool_name(child_class)
+    # make instance
+    inst = child_class.new
+    # get the lookup name for the Descriptorpool
+    inst.class.descriptor.name
+  end
+
+  def pb3_is_scalar_datatype_match(expected_type, actual_type)
+    e = expected_type.to_s.downcase.to_sym
+    a = actual_type.to_s.downcase.to_sym
+    case e
+    # when :string, :integer
+    when :string
+        a == e
+    when :integer
+        a == e
+    when :float
+        a == :float || a == :integer
+    end
+  end
+
+  # this method might be given an event or a hash
+  def pb3_convert_mismatched_types_getter(struct, key)
+    if struct.is_a? ::Hash
+      struct[key]
+    else
+      struct.get(key)
+    end
+  end
+
+  def pb3_convert_mismatched_types_setter(struct, key, value)
+    if struct.is_a? ::Hash
+      struct[key] = value
+    else
+      struct.set(key, value)
+    end
+    struct
+  end
+
+  def pb3_add_typeconversion_tag(event)
+    if event.get('tags').nil?
+        event.set('tags', [@pb3_typeconversion_tag])
+    else
+      existing_tags = event.get('tags')
+      event.set("tags", existing_tags << @pb3_typeconversion_tag)
+    end
+  end
+
+  def pb3_convert_mismatched_types(struct, mismatches)
+    mismatches.each do | m |
+        key = m['key']
+        expected_type = m['expected_type']
+        actual_type = m['actual_type']
+        if key.include? "." # the mismatch is in a child object
+            levels = key.split(/\./) # key is something like http_user_agent.minor_version and needs to be splitted.
+            key = levels[0]
+            sub_levels = levels.drop(1).join(".")
+            new_mismatches = [{"key"=>sub_levels, "actual_type"=>m["actual_type"], "expected_type"=>m["expected_type"]}]
+            value = pb3_convert_mismatched_types_getter(struct, key)
+            new_value = pb3_convert_mismatched_types(value, new_mismatches)
+            struct = pb3_convert_mismatched_types_setter(struct, key, new_value )
+        else
+            value = pb3_convert_mismatched_types_getter(struct, key)
+            begin
+                case expected_type.to_s
+                when "Integer"
+                    case actual_type.to_s
+                    when "String"
+                        new_value = value.to_i
+                    when "Float"
+                        if value.floor == value # such as 2.0
+                          new_value = value.to_i
+                        end
+                    end
+                when "String"
+                    new_value = value.to_s
+                when "Float"
+                    new_value = value.to_f
+                when "Boolean"
+                    new_value = value.to_s.downcase == "true"
+                end
+                if !new_value.nil?
+                  struct = pb3_convert_mismatched_types_setter(struct, key, new_value )
+                end
+            rescue Exception => ex
+                @logger.debug("Protobuf encoding error 5: Could not convert types for protobuf encoding: #{ex}")
+            end
+        end # if key contains .
+    end # mismatches.each
+    struct
+  end
 
   def pb3_prepare_for_encoding(datahash, class_name)
     if datahash.is_a?(::Hash)
@@ -428,7 +551,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
 
 
   def should_convert_to_string?(v)
-    !(v.is_a?(Fixnum) || v.is_a?(::Hash) || v.is_a?(::Array) || [true, false].include?(v))
+    !(v.is_a?(Integer) || !(v.is_a?(Float) || v.is_a?(::Hash) || v.is_a?(::Array) || [true, false].include?(v))
   end
 
 
