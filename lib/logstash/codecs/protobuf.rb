@@ -226,7 +226,9 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
 
   def encode(event)
     if @protobuf_version == 3
+      puts "encode yes" # TODO
       protobytes = pb3_encode(event)
+      puts "encode done #{protobytes}" # TODO
     else
       protobytes = pb2_encode(event)
     end
@@ -261,25 +263,48 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
   end
 
   def pb3_encode(event)
-    data = pb3_prepare_for_encoding(event.to_hash, @class_name)
+    puts "Helloooooh"
+
+    data = event.to_hash
+    is_recursive_call = !event.get('tags').nil? and event.get('tags').include? @pb3_typeconversion_tag
+    if is_recursive_call
+      puts "is recursion"
+      # remove the tag that we added to the event because
+      # the protobuf definition might not have a field for tags
+      data['tags'].delete(@pb3_typeconversion_tag)
+      if data['tags'].length == 0
+        data.delete('tags')
+      end
+    else
+      puts "Original data: #{event.inspect}"
+    end
+
+    data = pb3_prepare_for_encoding(data, @class_name)
     pb_obj = @pb_builder.new(data)
-    puts "I made it so far" # TODO remove
+    puts "I made it so far #{data}" # TODO remove
     r = @pb_builder.encode(pb_obj)
-    puts "Heello #{r}"
+    puts "bye #{r}"
     r
   rescue ArgumentError => e
+    puts "I has an ArgumentError #{e}"
     k = event.to_hash.keys.join(", ")
     @logger.warn("Protobuf encoding error 1: Argument error (#{e.inspect}). Reason: probably mismatching protobuf definition. \
       Required fields in the protobuf definition are: #{k} and fields must not begin with @ sign. The event has been discarded.")
   rescue TypeError => e
+    puts "has TypeError #{e}" # TODO
     mismatches = pb3_get_type_mismatches(data, "", @class_name)
+    puts "Mismatches: #{mismatches}"
     @logger.warn("Protobuf encoding error 2: Type error (#{e.inspect}). The event has been discarded. Type mismatches: #{mismatches}.")
     if @pb3_encoder_autoconvert_types
-      if event.get('tags').nil? or !event.get('tags').include? @pb3_typeconversion_tag
+      if !is_recursive_call
         event = pb3_convert_mismatched_types(event, mismatches)
+        puts "Converted event: #{event.to_hash}"
+        # Add a (temporary) tag to handle the recursion stop
         pb3_add_typeconversion_tag(event)
-
-        pb3_encode(event)
+        puts "Tagged event: #{event.to_hash}"
+        r = pb3_encode(event)
+        puts "Re-encoded #{r}"
+        r
       end
     end
   rescue => e
@@ -319,7 +344,6 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
         descriptor = Google::Protobuf::DescriptorPool.generated_pool.lookup(pb_class).lookup(key)
         if descriptor.subtype != nil
             class_of_nested_object = pb3_get_descriptorpool_name(descriptor.subtype.msgclass)
-            puts "Key #{key} of class #{pb_class} has type #{class_of_nested_object}" # TODO remove
             new_prefix = "#{key}."
             recursive_mismatches = pb3_get_type_mismatches(value, new_prefix, class_of_nested_object)
             mismatches.concat(recursive_mismatches)
@@ -369,7 +393,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     end
   end
 
-  # this method might be given an event or a hash
+
   def pb3_convert_mismatched_types_getter(struct, key)
     if struct.is_a? ::Hash
       struct[key]
@@ -396,6 +420,8 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     end
   end
 
+  # Due to recursion on nested fields in the event object this method might be given an event (1st call) or a hash (2nd .. nth call)
+  # First call will be the event object, child objects will be hashes.
   def pb3_convert_mismatched_types(struct, mismatches)
     mismatches.each do | m |
         key = m['key']
@@ -418,7 +444,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
                     when "String"
                         new_value = value.to_i
                     when "Float"
-                        if value.floor == value # such as 2.0
+                        if value.floor == value # convert values like 2.0 to 2, but not 2.1
                           new_value = value.to_i
                         end
                     end
@@ -551,7 +577,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
 
 
   def should_convert_to_string?(v)
-    !(v.is_a?(Integer) || !(v.is_a?(Float) || v.is_a?(::Hash) || v.is_a?(::Array) || [true, false].include?(v))
+    !(v.is_a?(::Fixnum) || v.is_a?(::Hash) || v.is_a?(::Array) || [true, false].include?(v))
   end
 
 
