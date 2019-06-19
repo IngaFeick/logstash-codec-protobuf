@@ -266,39 +266,58 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
       datahash = pb3_remove_typeconversion_tag(datahash)
     end
     datahash = pb3_prepare_for_encoding(datahash, @class_name)
-    puts "Data: #{datahash}"
     pb_obj = @pb_builder.new(datahash)
-    @pb_builder.encode(pb_obj)
+    puts "Trying to encode #{datahash}, is recursive call: #{is_recursive_call}"
+    r = @pb_builder.encode(pb_obj)
+    puts "Encoding successfull, #{event.get('uuid')} rec #{is_recursive_call}"
+    r
   rescue ArgumentError => e
     k = event.to_hash.keys.join(", ")
     @logger.warn("Protobuf encoding error 1: Argument error (#{e.inspect}). Reason: probably mismatching protobuf definition. \
-      Required fields in the protobuf definition are: #{k} and fields must not begin with @ sign. The event has been discarded.")
+      Required fields in the protobuf definition are: #{k} and fields must not begin with @ sign. The event has been discarded. uuid #{event.get('uuid')}") # TODO remove uuid
   rescue TypeError => e
-    mismatches = pb3_get_type_mismatches(datahash, "", @class_name)
-    puts "Mismatches: #{mismatches}" # TODO
-    @logger.warn("Protobuf encoding error 2: Type error (#{e.inspect}). The event has been discarded. Type mismatches: #{mismatches}.")
-    if @pb3_encoder_autoconvert_types
-      if !is_recursive_call
-        event = pb3_convert_mismatched_types(event, mismatches)
-        # Add a (temporary) tag to handle the recursion stop
-        pb3_add_typeconversion_tag(event)
-        pb3_encode(event)
-      end
-    end
+    pb3_handle_type_errors(event, e,is_recursive_call, datahash)
   rescue => e
-    @logger.warn("Protobuf encoding error 3: #{e.inspect}. Event discarded. Input data: #{event.to_hash}. The event has been discarded.")
+    @logger.warn("Protobuf encoding error 3: #{e.inspect}. Event discarded. Input data: #{event.to_hash}. The event has been discarded. uuid #{event.get('uuid')}")# TODO remove uuid
   end
 
-  def pb3_get_type_mismatches(data, key_prefix, pb_class)
+  def pb3_handle_type_errors(event, e, is_recursive_call, datahash)
+    begin
+      if is_recursive_call
+        @logger.warn("Protobuf encoding error 2a: Type error (#{e.inspect}). Some types could not be converted. The event has been discarded. Type mismatches: #{mismatches}. Event data: #{datahash} uuid #{event.get('uuid')}") # TODO remove uuid + event data
+      else
+        if @pb3_encoder_autoconvert_types
+          puts "Type error detected, trying to find mismatches uuid #{event.get('uuid')}" # TODO remove
+          mismatches = pb3_get_type_mismatches(datahash, "", @class_name, event.get('uuid')) # TODO remove uuid
+          msg = "Protobuf encoding error 2b: Type error (#{e.inspect}). Type mismatches: #{mismatches}. Will try to convert the data types. Original data: #{datahash} uuid #{event.get('uuid')}"# TODO remove uuid
+          puts msg # TODO remove
+          @logger.debug(msg)
+
+          event = pb3_convert_mismatched_types(event, mismatches)
+          # Add a (temporary) tag to handle the recursion stop
+          pb3_add_tag(event, @pb3_typeconversion_tag )
+          pb3_encode(event)
+        else
+          @logger.warn("Protobuf encoding error 2c: Type error (#{e.inspect}). The event has been discarded. Try setting pb3_encoder_autoconvert_types => true for automatic type conversion.")
+        end
+      end
+    rescue => ex
+      @logger.warn("Protobuf encoding error 2d: (#{e.inspect}). Failed to convert data types. The event has been discarded. uuid #{event.get('uuid')} original data: #{datahash}")# TODO remove uuid
+    end
+  end # pb3_handle_type_errors
+
+  def pb3_get_type_mismatches(data, key_prefix, pb_class, uuid) # TODO remove uuid
     mismatches = []
     data = data.to_hash # TODO remove when the class detection for hashes has been fixed
     if data.is_a? ::Hash
-        data.each do |key, value|
-            expected_type = pb3_get_expected_type(key, pb_class)
-            mismatches.concat(pb3_compare_datatypes(value, key, key_prefix, pb_class, expected_type))
-        end # data.each
-    else
-      puts "WEatnrining: i am not a hashi #{data.class}"
+      data.each do |key, value|
+          puts "Searching for expected type for field #{key}  uuid #{uuid}" # TODO remove
+          expected_type = pb3_get_expected_type(key, pb_class)
+          puts "Expected type for key #{key} value #{value} class #{pb_class} Prefix #{key_prefix} uuid #{uuid} is #{expected_type}" # TODO remove
+          r = pb3_compare_datatypes(value, key, key_prefix, pb_class, expected_type)
+          mismatches.concat(r)
+          puts "mismatches added: #{r}  uuid #{uuid}" # TODO remove
+      end # data.each
     end
     mismatches
   end
@@ -315,16 +334,21 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
 
   def pb3_get_expected_type(key, pb_class)
     pb_descriptor = Google::Protobuf::DescriptorPool.generated_pool.lookup(pb_class)
+    puts "pb descriptor for class #{pb_class} is #{pb_descriptor}"
     if !pb_descriptor.nil?
       pb_builder = pb_descriptor.msgclass
+      puts "pb builder found for class #{pb_class} key #{key} : #{pb_builder.inspect}"
+
       pb_obj = pb_builder.new({})
       v = pb_obj.send(key)
+
       if !v.nil?
+        puts "pb type for class #{pb_class} key #{key} is #{v.inspect}"
+
         v.class
+      else # this would be the
+        nil
       end
-    else
-      @logger.debug("Protobuf class not found in DescriptorPool: #{pb_class}")
-      STDERR.write("Protobuf class not found in DescriptorPool: #{pb_class}") # TODO remove
     end
   end
 
@@ -335,7 +359,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
       is_mismatch = false
     else
       case value
-      when ::Hash, Hash, Google::Protobuf::MessageExts #Something::RumAkamai::ProtoAkamai2Rum::ProtoGeoLocation # nested object TODO this is deffo broken
+      when ::Hash, Google::Protobuf::MessageExts #Something::RumAkamai::ProtoAkamai2Rum::ProtoGeoLocation # nested object TODO this is deffo broken
         is_mismatch = false
         descriptor = Google::Protobuf::DescriptorPool.generated_pool.lookup(pb_class).lookup(key)
         if descriptor.subtype != nil
@@ -344,7 +368,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
           recursive_mismatches = pb3_get_type_mismatches(value, new_prefix, class_of_nested_object)
           mismatches.concat(recursive_mismatches)
         end
-      when ::Array, Array
+      when ::Array,
         expected_type = pb3_get_expected_type(key, pb_class)
         is_mismatch = (expected_type != Google::Protobuf::RepeatedField)
         child_type = Google::Protobuf::DescriptorPool.generated_pool.lookup(pb_class).lookup(key).type
@@ -408,12 +432,12 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     struct
   end
 
-  def pb3_add_typeconversion_tag(event)
+  def pb3_add_tag(event, tag )
     if event.get('tags').nil?
-        event.set('tags', [@pb3_typeconversion_tag])
+        event.set('tags', [tag])
     else
       existing_tags = event.get('tags')
-      event.set("tags", existing_tags << @pb3_typeconversion_tag)
+      event.set("tags", existing_tags << tag)
     end
   end
 
@@ -467,7 +491,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     if datahash.is_a?(::Hash)
 
       # 0) Remove empty fields.
-      datahash = datahash.select { |key, value| !value.nil? }
+      datahash = datahash.select { |key, value| !value.nil? } #TODO this doesnt work yet on nested fields or sth
 
       # Preparation: the data cannot be encoded until certain criteria are met:
       # 1) remove @ signs from keys.
@@ -490,8 +514,12 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
                 original_value
               else
                 r = pb3_prepare_for_encoding(original_value, class_name)
-                builder = Google::Protobuf::DescriptorPool.generated_pool.lookup(class_name).msgclass
-                builder.new(r)
+                begin
+                  builder = Google::Protobuf::DescriptorPool.generated_pool.lookup(class_name).msgclass
+                  builder.new(r)
+                rescue Exception => ex
+                  @logger.warn("Protobuf encoding error 4: Could not instantiate class #{class_name} for data #{r}, reason: #{ex} uuid #{event.get('uuid')} original data: #{datahash}")# TODO remove uuid
+                end
               end # if is array
           end # if datahash_include
         end # do
