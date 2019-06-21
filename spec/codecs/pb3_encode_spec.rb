@@ -141,12 +141,14 @@ describe LogStash::Codecs::Protobuf do
 
       # TODO all of these are kaputtski
 
-    # "user_agent"=>{"minor"=>0,"major"=>"74"}, # major should autoconvert to float
-    # "dom"=>{"script"=>nil, "ln"=>2063, "ext"=>47.0}, # ext should autoconvert to int. script being empty should be ignored.
-    # "geo"=>{"ovr"=>"false"}, # ovr should autoconvert to Boolean
-    # "header"=>{"sender_id"=>1}, # sender_id should autoconvert to string
-     "domain" => "www"
+     "user_agent"=>{"minor"=>0,"major"=>"74"}, # major should autoconvert to float
+     "dom"=>{"script"=>nil, "ln"=>2063, "ext"=>47.0}, # ext should autoconvert to int. script being empty should be ignored.
+     "geo"=>{"ovr"=>"false"}, # ovr should autoconvert to Boolean
+     "header"=>{"sender_id"=>1}, # sender_id should autoconvert to string
+     "domain" => "www",
+     "timestamp" => 1234, # should autoconvert to string
     )
+
 
     it "should fix datatypes to match the protobuf definition" do
 
@@ -155,8 +157,13 @@ describe LogStash::Codecs::Protobuf do
 
         pb_builder = Google::Protobuf::DescriptorPool.generated_pool.lookup("something.rum_akamai.ProtoAkamai2Rum").msgclass
         decoded_data = pb_builder.decode(data)
-        expect(decoded_data.domain ).to eq(event.get("domain") ) # only test fields which have not been converted
-        # if this ^ works, then the convertion works aswell because otherwise there would have been an exception
+        expect(decoded_data.domain ).to eq(event.get("domain") )
+        expect(decoded_data.user_agent.major).to eq(74)
+        expect(decoded_data.dom.ext).to eq(47)
+        expect(decoded_data.geo.ovr).to eq(false)
+        expect(decoded_data.header.sender_id).to eq("1")
+        expect(decoded_data.timestamp).to eq("1234")
+
       end
       subject.encode(event)
     end # it
