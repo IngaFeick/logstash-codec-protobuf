@@ -196,16 +196,62 @@ context "encodePB3-e" do
 
         pb_builder = Google::Protobuf::DescriptorPool.generated_pool.lookup("something.rum_akamai.ProtoAkamai3Rum").msgclass
         decoded_data = pb_builder.decode(data)
+        puts "Decoded: #{decoded_data.to_hash}" # todo remove
         expect(decoded_data.geo.organisation ).to eq(event.get("geo")["organisation"])
         expect(decoded_data.geo.ovr ).to eq(event.get("geo")["ovr"])
         expect(decoded_data.geo.postalcode ).to eq(event.get("geo")["postalcode"])
-        expect(decoded_data.header.sender_id ).to eq(event.get("header")['sender_id'] ) # only test fields which have not been converted
+        expect(decoded_data.header.sender_id ).to eq(event.get("header")['sender_id'] )
 
       end
       subject.encode(event)
     end # it
 
   end # context #encodePB3-e
+
+
+
+
+ context "encodePB3-f" do
+
+    #### Test case 5 ####################################################################################################################
+
+
+
+    subject do
+      next LogStash::Codecs::Protobuf.new("class_name" => "something.rum_akamai.ProtoAkamai3Rum",  #TODO
+        "pb3_encoder_autoconvert_types" => true,
+        "include_path" => [pb_include_path + '/pb3/rum3_pb.rb' ], "protobuf_version" => 3)
+    end
+
+    event = LogStash::Event.new(
+      {
+        "user_agent"=>{"type"=>"Desktop", "major"=>19, "minor"=>6, "family"=>"Yandex Browser", "raw"=>"Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 YaBrowser/19.6.1.153 Yowser/2.5 Safari/537.36", "osversion"=>"7", "os"=>"Windows", "mobile"=>"0"},
+        "geo"=>{"isp"=>"Yota", "netspeed"=>nil, "ovr"=>false, "cc"=>"RU", "city"=>"Moscow", "postalcode"=>"127550", "rg"=>"48", "organisation"=>"Yota"},
+        "active_ctests"=>["1443703219", "1459869632", "1472823241", "25798", "27291", "32046", "35446", "39578", "40428", "40402", "42320", "42304", "43759", "42164", "42280", "42673", "44629", "44964", "45265", "45465", "45104", "45172", "45171", "45433", "39875", "45383", "45749", "45839", "45038", "46136", "45958", "46164", "46395", "46378", "45766", "46411", "46480", "46534", "46505", "46587", "42107", "46234", "46523", "46690", "45800", "44378", "46691", "46918", "46610", "46363", "46970", "45123", "46977", "43806", "46535", "47123", "47121", "46947", "47231", "47176", "46630", "47190", "47357", "47480"],
+        "timestamp"=>"1561113635727",
+        "header"=>{"sender_id"=>"0"},
+        "timers"=>{"t_resp"=>235},
+        "page_group"=>"Homepage",
+        "url"=>"https://a.intentmedia.net/",
+        "domain"=>"something.com",
+        "dom"=>{"ext"=>50, "script"=>68, "ln"=>1125}}
+
+    )
+
+    it "should ignore empty fields" do
+
+      subject.on_event do |event, data|
+        insist { data.is_a? String }
+
+        pb_builder = Google::Protobuf::DescriptorPool.generated_pool.lookup("something.rum_akamai.ProtoAkamai3Rum").msgclass
+        decoded_data = pb_builder.decode(data)
+        expect(decoded_data.geo.organisation ).to eq(event.get("geo")["organisation"])
+
+      end
+      subject.encode(event)
+    end # it
+
+  end # context #encodePB3-f
 
 
 end # describe
