@@ -265,12 +265,18 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     if is_recursive_call
       datahash = pb3_remove_typeconversion_tag(datahash)
     else
-      puts ""
-      puts ""
+      # puts ""
+      # puts ""
 
     end
-    datahash = remove_nil_fields(datahash) # TODO integrate into pb3_prepare_for_encoding
+
     datahash = pb3_prepare_for_encoding(datahash, @class_name)
+    if datahash.nil?
+      @logger.warn("Protobuf encoding error 4: empty data. Event was: #{event.to_hash}")
+    end
+    if @pb_builder.nil?
+      @logger.warn("Protobuf encoding error 5: empty pb builder for class #{@class_name}")
+    end
     pb_obj = @pb_builder.new(datahash)
     @pb_builder.encode(pb_obj)
   rescue ArgumentError => e
@@ -280,17 +286,17 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
   rescue TypeError => e
     pb3_handle_type_errors(event, e,is_recursive_call, datahash)
   rescue => e
-    @logger.warn("Protobuf encoding error 3: #{e.inspect}. Event discarded. Input data: #{event.to_hash}. The event has been discarded.")
+    @logger.warn("Protobuf encoding error 3: #{e.inspect}. Event discarded. Input data: #{event.to_hash}. The event has been discarded. Backtrace: #{e.backtrace}")
   end
 
 
   def remove_nil_fields(datahash)
-    puts "Datahash before nil removal: #{datahash}"
+    # puts "Datahash before nil removal: #{datahash}"
     datahash = datahash.select { |key, value| !value.nil? }
     datahash.each do |key, value|
       datahash[key] = remove_nil_fields(value) if value.is_a?(Hash)
     end
-    puts "Datahash after nil removal: #{datahash}"
+    # puts "Datahash after nil removal: #{datahash}"
 
     datahash
   end
@@ -504,85 +510,15 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
   end
 
   def pb3_prepare_for_encoding(datahash, parent_class_name)
-    puts "Enter pb3_prepare_for_encoding with data #{datahash}"
-    if datahash.is_a?(::Hash)
 
-      # 0) Remove empty fields.
-      # TODO move this here
+    # Nil fields need to be removed to that the encoder doesn't crash
+    datahash = remove_nil_fields(datahash)
 
-      # Preparation: the data cannot be encoded until certain criteria are met:
-      # 1) remove @ signs from keys.
-      # 2) convert timestamps and other objects to strings
-      datahash = datahash.inject({}){|x,(k,v)| x[k.gsub(/@/,'').to_sym] = (should_convert_to_string?(v) ? v.to_s : v); x}
+    # Preparation: the data cannot be encoded until certain criteria are met:
+    # 1) remove @ signs from keys.
+    # 2) convert timestamps and other objects to strings
+    datahash.inject({}){|x,(k,v)| x[k.gsub(/@/,'').to_sym] = (should_convert_to_string?(v) ? v.to_s : v); x}
 
-      # Check if any of the fields in this hash are protobuf classes and if so, create a builder for them.
-      puts "Checking for messageclass metainfo for #{parent_class_name}"
-      meta = @metainfo_messageclasses[parent_class_name]
-      if meta
-        meta.map do | (field_name,class_name) |
-          puts "has meta data on message classes: field #{field_name} => #{class_name}"
-
-          key = field_name.to_sym
-          if datahash.include?(key)
-            puts "Datahash has key #{key}"
-            original_value = datahash[key]
-            datahash[key] =
-              if original_value.is_a?(::Array)
-                puts "pb3_prepare_for_encoding is meta array"
-                # make this field an array/list of protobuf objects
-                # value is a list of hashed complex objects, each of which needs to be protobuffed and
-                # put back into the list.
-                original_value.map { |x| pb3_prepare_for_encoding(x, class_name) }
-                original_value
-              else
-                puts "pb3_prepare_for_encoding is meta object"
-                r = pb3_prepare_for_encoding(original_value, class_name)
-                begin
-                  puts "Creating pb builder for class #{class_name}"
-                  builder = Google::Protobuf::DescriptorPool.generated_pool.lookup(class_name).msgclass
-                  builder.new(r)
-                rescue Exception => ex
-                  @logger.warn("Protobuf encoding error 4: Could not instantiate class #{class_name} for data #{r}, reason: #{ex} original data: #{datahash}")
-                end
-              end # if is array
-
-          end # if datahash_include
-        end # do
-      else
-        puts "No Metadata found for class #{parent_class_name} in #{@metainfo_messageclasses}"
-      end # if meta
-
-      # Check if any of the fields in this hash are enum classes and if so, create a builder for them.
-      meta = @metainfo_enumclasses[parent_class_name]
-      if meta
-        meta.map do | (field_name,class_name) |
-          key = field_name.to_sym
-          if datahash.include?(key)
-            original_value = datahash[key]
-            datahash[key] = case original_value
-            when ::Array
-              original_value.map { |x| pb3_prepare_for_encoding(x, class_name) }
-              original_value
-            when Fixnum
-              original_value # integers will be automatically converted into enum
-            # else
-              # feature request: support for providing integers as strings or symbols.
-              # not fully tested yet:
-              # begin
-              #   enum_lookup_name = "#{class_name}::#{original_value}"
-              #   enum_lookup_name.split('::').inject(Object) do |mod, class_name|
-              #     mod.const_get(class_name)
-              #   end # do
-              # rescue => e
-              #   @logger.debug("Encoding error 3: could not translate #{original_value} into enum. #{e}")
-              #   raise e
-              # end
-            end
-          end # if datahash_include
-        end # do
-      end # if meta
-    end # if is hash
-    datahash
   end
 
   def pb2_encode(event)
