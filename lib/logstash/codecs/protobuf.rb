@@ -264,13 +264,15 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     is_recursive_call = !event.get('tags').nil? and event.get('tags').include? @pb3_typeconversion_tag
     if is_recursive_call
       datahash = pb3_remove_typeconversion_tag(datahash)
+    else
+      puts ""
+      puts ""
+
     end
+    datahash = remove_nil_fields(datahash) # TODO integrate into pb3_prepare_for_encoding
     datahash = pb3_prepare_for_encoding(datahash, @class_name)
     pb_obj = @pb_builder.new(datahash)
-
-    r = @pb_builder.encode(pb_obj)
-
-    r
+    @pb_builder.encode(pb_obj)
   rescue ArgumentError => e
     k = event.to_hash.keys.join(", ")
     @logger.warn("Protobuf encoding error 1: Argument error (#{e.inspect}). Reason: probably mismatching protobuf definition. \
@@ -281,34 +283,54 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     @logger.warn("Protobuf encoding error 3: #{e.inspect}. Event discarded. Input data: #{event.to_hash}. The event has been discarded.")
   end
 
+
+  def remove_nil_fields(datahash)
+    puts "Datahash before nil removal: #{datahash}"
+    datahash = datahash.select { |key, value| !value.nil? }
+    datahash.each do |key, value|
+      datahash[key] = remove_nil_fields(value) if value.is_a?(Hash)
+    end
+    puts "Datahash after nil removal: #{datahash}"
+
+    datahash
+  end
+
   def pb3_handle_type_errors(event, e, is_recursive_call, datahash)
     begin
       if is_recursive_call
-        @logger.warn("Protobuf encoding error 2a: Type error (#{e.inspect}). Some types could not be converted. The event has been discarded. Type mismatches: #{mismatches}.")
+        @logger.warn("Protobuf encoding error 2.1: Type error (#{e.inspect}). Some types could not be converted. The event has been discarded. Type mismatches: #{mismatches}.")
       else
         if @pb3_encoder_autoconvert_types
 
+          msg = "Protobuf encoding error 2.2: Type error (#{e.inspect}). Will try to convert the data types. Original data: #{datahash}"
+          @logger.warn(msg)
           mismatches = pb3_get_type_mismatches(datahash, "", @class_name)
-          msg = "Protobuf encoding error 2b: Type error (#{e.inspect}). Type mismatches: #{mismatches}. Will try to convert the data types. Original data: #{datahash}"
-          @logger.debug(msg)
+
+          msg = "Protobuf encoding info 2.2: Type mismatches found: #{mismatches}." # TODO remove
+          @logger.warn(msg)
 
           event = pb3_convert_mismatched_types(event, mismatches)
           # Add a (temporary) tag to handle the recursion stop
           pb3_add_tag(event, @pb3_typeconversion_tag )
           pb3_encode(event)
         else
-          @logger.warn("Protobuf encoding error 2c: Type error (#{e.inspect}). The event has been discarded. Try setting pb3_encoder_autoconvert_types => true for automatic type conversion.")
+          @logger.warn("Protobuf encoding error 2.3: Type error (#{e.inspect}). The event has been discarded. Try setting pb3_encoder_autoconvert_types => true for automatic type conversion.")
         end
       end
+    rescue TypeError => e
+      if @pb3_encoder_autoconvert_types
+        @logger.warn("Protobuf encoding error 2.4.1: (#{e.inspect}). Failed to convert data types. The event has been discarded. original data: #{datahash}")
+      else
+        @logger.warn("Protobuf encoding error 2.4.2: (#{e.inspect}). The event has been discarded.")
+      end
     rescue => ex
-      @logger.warn("Protobuf encoding error 2d: (#{e.inspect}). Failed to convert data types. The event has been discarded. original data: #{datahash}")
+      @logger.warn("Protobuf encoding error 2.5: (#{e.inspect}). The event has been discarded. Auto-typecasting was on: #{@pb3_encoder_autoconvert_types}")
     end
   end # pb3_handle_type_errors
 
   def pb3_get_type_mismatches(data, key_prefix, pb_class)
     mismatches = []
     data.to_hash.each do |key, value|
-
         expected_type = pb3_get_expected_type(key, pb_class)
         r = pb3_compare_datatypes(value, key, key_prefix, pb_class, expected_type)
         mismatches.concat(r)
@@ -322,14 +344,10 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
 
     if !pb_descriptor.nil?
       pb_builder = pb_descriptor.msgclass
-
-
       pb_obj = pb_builder.new({})
       v = pb_obj.send(key)
 
       if !v.nil?
-
-
         v.class
       else
         nil
@@ -341,7 +359,6 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     mismatches = []
 
     if value.nil?
-
       is_mismatch = false
     else
       case value
@@ -352,12 +369,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
         if descriptor.subtype != nil
           class_of_nested_object = pb3_get_descriptorpool_name(descriptor.subtype.msgclass)
           new_prefix = "#{key}."
-
-
-
-
           recursive_mismatches = pb3_get_type_mismatches(value, new_prefix, class_of_nested_object)
-
           mismatches.concat(recursive_mismatches)
         end
       when ::Array
@@ -491,11 +503,12 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     struct
   end
 
-  def pb3_prepare_for_encoding(datahash, class_name)
+  def pb3_prepare_for_encoding(datahash, parent_class_name)
+    puts "Enter pb3_prepare_for_encoding with data #{datahash}"
     if datahash.is_a?(::Hash)
 
       # 0) Remove empty fields.
-      datahash = datahash.select { |key, value| !value.nil? }
+      # TODO move this here
 
       # Preparation: the data cannot be encoded until certain criteria are met:
       # 1) remove @ signs from keys.
@@ -503,34 +516,44 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
       datahash = datahash.inject({}){|x,(k,v)| x[k.gsub(/@/,'').to_sym] = (should_convert_to_string?(v) ? v.to_s : v); x}
 
       # Check if any of the fields in this hash are protobuf classes and if so, create a builder for them.
-      meta = @metainfo_messageclasses[class_name]
+      puts "Checking for messageclass metainfo for #{parent_class_name}"
+      meta = @metainfo_messageclasses[parent_class_name]
       if meta
         meta.map do | (field_name,class_name) |
+          puts "has meta data on message classes: field #{field_name} => #{class_name}"
+
           key = field_name.to_sym
           if datahash.include?(key)
+            puts "Datahash has key #{key}"
             original_value = datahash[key]
             datahash[key] =
               if original_value.is_a?(::Array)
+                puts "pb3_prepare_for_encoding is meta array"
                 # make this field an array/list of protobuf objects
                 # value is a list of hashed complex objects, each of which needs to be protobuffed and
                 # put back into the list.
                 original_value.map { |x| pb3_prepare_for_encoding(x, class_name) }
                 original_value
               else
+                puts "pb3_prepare_for_encoding is meta object"
                 r = pb3_prepare_for_encoding(original_value, class_name)
                 begin
+                  puts "Creating pb builder for class #{class_name}"
                   builder = Google::Protobuf::DescriptorPool.generated_pool.lookup(class_name).msgclass
                   builder.new(r)
                 rescue Exception => ex
                   @logger.warn("Protobuf encoding error 4: Could not instantiate class #{class_name} for data #{r}, reason: #{ex} original data: #{datahash}")
                 end
               end # if is array
+
           end # if datahash_include
         end # do
+      else
+        puts "No Metadata found for class #{parent_class_name} in #{@metainfo_messageclasses}"
       end # if meta
 
       # Check if any of the fields in this hash are enum classes and if so, create a builder for them.
-      meta = @metainfo_enumclasses[class_name]
+      meta = @metainfo_enumclasses[parent_class_name]
       if meta
         meta.map do | (field_name,class_name) |
           key = field_name.to_sym
@@ -558,7 +581,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
           end # if datahash_include
         end # do
       end # if meta
-    end
+    end # if is hash
     datahash
   end
 
@@ -620,6 +643,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
 
 
   def pb3_metadata_analyis(filename)
+
     regex_class_name = /\s*add_message "(?<name>.+?)" do\s+/ # TODO optimize both regexes for speed (negative lookahead)
     regex_pbdefs = /\s*(optional|repeated)(\s*):(?<name>.+),(\s*):(?<type>\w+),(\s*)(?<position>\d+)(, \"(?<enum_class>.*?)\")?/
     class_name = ""
