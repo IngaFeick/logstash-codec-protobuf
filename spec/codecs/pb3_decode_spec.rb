@@ -337,4 +337,60 @@ describe LogStash::Codecs::Protobuf do
   end # context test7_pb3
 
 
+
+
+  context "#test8_pb3" do
+
+    classname = "bk.sk.pk.reservations.proto.types.v0.ReservationEntry"
+    #### Test case 6: decode test case for github issue 17 ####################################################################################################################
+    let(:plugin_8) { LogStash::Codecs::Protobuf.new("class_name" => classname,
+                       "include_path" => [pb_include_path + '/pb3/ReservationEntry_pb.rb'], "protobuf_version" => 3)  }
+    before do
+        plugin_8.register
+    end
+
+    it "test for issue 42" do
+
+
+      amount = Bk::Sk::Pk::Reservations::Proto::Types::V0::DecimalNumber.new({:unscaledValue => 4711, :scale => 100})
+      testdata = {
+        :id => "0815",
+        :internalAccountId => "12345",
+        :state => Bk::Sk::Pk::Reservations::Proto::Types::V0::ReservationState::EXPIRED,
+        :instructedAmount => Bk::Sk::Pk::Reservations::Proto::Types::V0::InstructedAmount.new({:amount => amount, :currency => "USD"}),
+        :lifetime => Bk::Sk::Pk::Reservations::Proto::Types::V0::Lifetime.new({:startDateTime => "1010101010", :endDateTime => "01010101010"}),
+        :requestor => Bk::Sk::Pk::Reservations::Proto::Types::V0::Requestor.new({:productCode => "abc", :systemCode => "def", :init => "ghi"}),
+        :description => Bk::Sk::Pk::Reservations::Proto::Types::V0::Description.new({:text1 => "xyz", :text2 => "wqp"}),
+        :forceMarker => true,
+        :creationTimestamp => "2019-01-01 12:30:45.00.000000"
+      }
+
+
+      event_class = Google::Protobuf::DescriptorPool.generated_pool.lookup(classname).msgclass
+      event_obj = event_class.new(testdata)
+      bin = event_class.encode(event_obj)
+      plugin_8.decode(bin) do |event|
+        expect(event.get("id") ).to eq(testdata[:id] )
+        expect(event.get("internalAccountId") ).to eq(testdata[:internalAccountId] )
+        expect(event.get("forceMarker") ).to eq(testdata[:forceMarker] )
+        expect(event.get("creationTimestamp") ).to eq(testdata[:creationTimestamp] )
+        expect(event.get("lifetime")['startDateTime']).to eq(testdata[:lifetime][:startDateTime] )
+        expect(event.get("lifetime")['endDateTime']).to eq(testdata[:lifetime][:endDateTime] )
+        expect(event.get("requestor")['productCode']).to eq(testdata[:requestor][:productCode] )
+        expect(event.get("requestor")['systemCode']).to eq(testdata[:requestor][:systemCode] )
+        expect(event.get("requestor")['init']).to eq(testdata[:requestor][:init] )
+        expect(event.get("description")['text1']).to eq(testdata[:description][:text1] )
+        expect(event.get("description")['text2']).to eq(testdata[:description][:text2] )
+        expect(event.get("instructedAmount")['currency']).to eq(testdata[:instructedAmount][:currency] )
+        expect(event.get("instructedAmount")['amount']['scale']).to eq(testdata[:instructedAmount][:amount][:scale] )
+        expect(event.get("instructedAmount")['amount']['unscaledValue']).to eq(testdata[:instructedAmount][:amount][:unscaledValue] )
+        expect(event.get("state") ).to eq("EXPIRED")
+
+      end
+    end # it
+
+
+  end # context test8_pb3
+
+
 end # describe
