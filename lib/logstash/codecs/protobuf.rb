@@ -141,7 +141,6 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
   config :pb3_encoder_autoconvert_types, :validate => :boolean, :default => true, :required => false
 
 
-
   attr_reader :execution_context
 
   # id of the pipeline whose events you want to read from.
@@ -154,7 +153,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     @metainfo_enumclasses = {}
     @metainfo_pb2_enumlist = []
     @pb3_typeconversion_tag = "_protobuf_type_converted"
-
+    @pb3_set_oneOf_metainfo = true
 
     if @include_path.length > 0 and not class_file.strip.empty?
       raise LogStash::ConfigurationError, "Cannot use `include_path` and `class_file` at the same time"
@@ -203,12 +202,19 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
   def decode(data)
     if @protobuf_version == 3
       decoded = @pb_builder.decode(data.to_s)
+      if @pb3_set_oneOf_metainfo
+        meta = pb3_get_oneOf_metainfo(decoded, @class_name)
+      end
       h = pb3_deep_to_hash(decoded)
     else
       decoded = @pb_builder.parse(data.to_s)
       h = decoded.to_hash
     end
-    yield LogStash::Event.new(h) if block_given?
+    e = LogStash::Event.new(h)
+    if @protobuf_version == 3 and @pb3_set_oneOf_metainfo
+      e.set("[@metadata][pb_oneOf]", meta)
+    end
+    yield e if block_given?
   rescue => e
     @logger.warn("Couldn't decode protobuf: #{e.inspect}.")
     if stop_on_error
@@ -354,17 +360,15 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     else
       case value
       when ::Hash, Google::Protobuf::MessageExts
-
         is_mismatch = false
         descriptor = Google::Protobuf::DescriptorPool.generated_pool.lookup(pb_class).lookup(key)
-        if descriptor.subtype != nil
+        if !descriptor.subtype.nil?
           class_of_nested_object = pb3_get_descriptorpool_name(descriptor.subtype.msgclass)
           new_prefix = "#{key}."
           recursive_mismatches = pb3_get_type_mismatches(value, new_prefix, class_of_nested_object)
           mismatches.concat(recursive_mismatches)
         end
       when ::Array
-
         expected_type = pb3_get_expected_type(key, pb_class)
         is_mismatch = (expected_type != Google::Protobuf::RepeatedField)
         child_type = Google::Protobuf::DescriptorPool.generated_pool.lookup(pb_class).lookup(key).type
@@ -510,6 +514,29 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     datahash
   end
 
+  def pb3_get_oneOf_metainfo(pb_object, pb_class_name)
+    meta = {}
+    pb_class = Google::Protobuf::DescriptorPool.generated_pool.lookup(pb_class_name).msgclass
+
+    pb_class.descriptor.each_oneof { |field|
+      field.each { | group_option |
+        if !pb_object.send(group_option.name).nil?
+            meta[field.name] = group_option.name
+        end
+      }
+    }
+
+    pb_class.descriptor.select{ |field| field.type == :message }.each { | field |
+      # recurse over nested protobuf classes
+      pb_sub_object = pb_object.send(field.name)
+      if !pb_sub_object.nil? and !field.subtype.nil?
+          pb_sub_class = pb3_get_descriptorpool_name(field.subtype.msgclass)
+          meta[field.name] = pb3_get_oneOf_metainfo(pb_sub_object, pb_sub_class)
+      end
+    }
+
+    meta
+  end
 
 
   def pb2_encode(event)
