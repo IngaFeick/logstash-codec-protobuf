@@ -303,8 +303,8 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
           @logger.warn(msg)
           mismatches = pb3_get_type_mismatches(datahash, "", @class_name)
 
-          msg = "Protobuf encoding info 2.2: Type mismatches found: #{mismatches}." # TODO remove
-          @logger.warn(msg)
+          #msg = "Protobuf encoding info 2.2: Type mismatches found: #{mismatches}."
+          #@logger.warn(msg)
 
           event = pb3_convert_mismatched_types(event, mismatches)
           # Add a (temporary) tag to handle the recursion stop
