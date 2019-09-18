@@ -389,6 +389,48 @@ describe LogStash::Codecs::Protobuf do
       end
     end # it
 
+    it "test for issue 42" do
+
+
+      amount = Bk::Sk::Pk::Reservations::Proto::Types::V0::DecimalNumber.new({:unscaledValue => 658000, :scale => 2})
+      testdata = {
+        :eventId => "94842045307O20171115155142942855",
+        :reservationId => "94842045307",
+        :internalAccountId => "5076139206",
+        :state => Bk::Sk::Pk::Reservations::Proto::Types::V0::ReservationState::RESERVED,
+        :instructedAmount => Bk::Sk::Pk::Reservations::Proto::Types::V0::InstructedAmount.new({:amount => amount, :cy => "DKK"}),
+        :lifetime => Bk::Sk::Pk::Reservations::Proto::Types::V0::Lifetime.new({:startDateTime => "2020-01-08T02:57:45.684530Z", :endDateTime => "2020-01-09T22:32:05.413258Z"}),
+        :requestor => Bk::Sk::Pk::Reservations::Proto::Types::V0::Requestor.new({:productCode => "Llq", :systemCode => "C", :init => "NOS"}),
+        :description => Bk::Sk::Pk::Reservations::Proto::Types::V0::Description.new({:text1 => "-m6TCc((eee9H6G^&", :text2 => "LMiO2jdFjt&7!.@Mp{uizu_+S?3,u=}W]9Nk\'m-#WE2MD*IE"}),
+
+        :forceMarker => true,
+        :createdOn => "2017-11-15T13:51:42.942855Z"
+      }
+
+
+      event_class = Google::Protobuf::DescriptorPool.generated_pool.lookup(classname).msgclass
+      event_obj = event_class.new(testdata)
+      bin = event_class.encode(event_obj)
+      plugin_8.decode(bin) do |event|
+        expect(event.get("id") ).to eq(testdata[:id] )
+        expect(event.get("internalAccountId") ).to eq(testdata[:internalAccountId] )
+        expect(event.get("forceMarker") ).to eq(testdata[:forceMarker] )
+        expect(event.get("creationTimestamp") ).to eq(testdata[:creationTimestamp] )
+        expect(event.get("lifetime")['startDateTime']).to eq(testdata[:lifetime][:startDateTime] )
+        expect(event.get("lifetime")['endDateTime']).to eq(testdata[:lifetime][:endDateTime] )
+        expect(event.get("requestor")['productCode']).to eq(testdata[:requestor][:productCode] )
+        expect(event.get("requestor")['systemCode']).to eq(testdata[:requestor][:systemCode] )
+        expect(event.get("requestor")['init']).to eq(testdata[:requestor][:init] )
+        expect(event.get("description")['text1']).to eq(testdata[:description][:text1] )
+        expect(event.get("description")['text2']).to eq(testdata[:description][:text2] )
+        expect(event.get("instructedAmount")['currency']).to eq(testdata[:instructedAmount][:currency] )
+        expect(event.get("instructedAmount")['amount']['scale']).to eq(testdata[:instructedAmount][:amount][:scale] )
+        expect(event.get("instructedAmount")['amount']['unscaledValue']).to eq(testdata[:instructedAmount][:amount][:unscaledValue] )
+        expect(event.get("state") ).to eq("EXPIRED")
+
+      end
+    end # it
+
 
   end # context test8_pb3
 
