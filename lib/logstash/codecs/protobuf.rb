@@ -140,6 +140,10 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
   # Instruct the encoder to attempt converting data types to match the protobuf definitions. Available only for protobuf version 3.
   config :pb3_encoder_autoconvert_types, :validate => :boolean, :default => true, :required => false
 
+  # Add meta information about oneof fields to
+  # For more information see https://developers.google.com/protocol-buffers/docs/proto3#oneof
+  config :pb3_set_oneof_metainfo, :validate => :boolean, :default => false, :required => false
+
 
   attr_reader :execution_context
 
@@ -153,7 +157,6 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     @metainfo_enumclasses = {}
     @metainfo_pb2_enumlist = []
     @pb3_typeconversion_tag = "_protobuf_type_converted"
-    @pb3_set_oneOf_metainfo = true
 
     if @include_path.length > 0 and not class_file.strip.empty?
       raise LogStash::ConfigurationError, "Cannot use `include_path` and `class_file` at the same time"
@@ -202,8 +205,8 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
   def decode(data)
     if @protobuf_version == 3
       decoded = @pb_builder.decode(data.to_s)
-      if @pb3_set_oneOf_metainfo
-        meta = pb3_get_oneOf_metainfo(decoded, @class_name)
+      if @pb3_set_oneof_metainfo
+        meta = pb3_get_oneof_metainfo(decoded, @class_name)
       end
       h = pb3_deep_to_hash(decoded)
     else
@@ -211,8 +214,8 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
       h = decoded.to_hash
     end
     e = LogStash::Event.new(h)
-    if @protobuf_version == 3 and @pb3_set_oneOf_metainfo
-      e.set("[@metadata][pb_oneOf]", meta)
+    if @protobuf_version == 3 and @pb3_set_oneof_metainfo
+      e.set("[@metadata][pb_oneof]", meta)
     end
     yield e if block_given?
   rescue => e
@@ -514,7 +517,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
     datahash
   end
 
-  def pb3_get_oneOf_metainfo(pb_object, pb_class_name)
+  def pb3_get_oneof_metainfo(pb_object, pb_class_name)
     meta = {}
     pb_class = Google::Protobuf::DescriptorPool.generated_pool.lookup(pb_class_name).msgclass
 
@@ -531,7 +534,7 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
       pb_sub_object = pb_object.send(field.name)
       if !pb_sub_object.nil? and !field.subtype.nil?
           pb_sub_class = pb3_get_descriptorpool_name(field.subtype.msgclass)
-          meta[field.name] = pb3_get_oneOf_metainfo(pb_sub_object, pb_sub_class)
+          meta[field.name] = pb3_get_oneof_metainfo(pb_sub_object, pb_sub_class)
       end
     }
 

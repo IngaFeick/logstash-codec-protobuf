@@ -362,9 +362,8 @@ describe LogStash::Codecs::Protobuf do
         expect(event.get("pegasus")["wings_length"] ).to eq(pegasus_data[:wings_length])
         expect(event.get("tail")['tail_length'] ).to eq(tail_data[:tail_length])
         expect(event.get("tail")['braided']['braiding_style'] ).to eq(braid_data[:braiding_style])
-        expect(event.get("@metadata")["pb_oneOf"]["horse_type"] ).to eq("pegasus")
-        expect(event.get("@metadata")["pb_oneOf"]["tail"]["hair_type"] ).to eq("braided")
-
+        expect(event.get("@metadata")["pb_oneof"]["horse_type"] ).to eq("pegasus")
+        expect(event.get("@metadata")["pb_one0f"]["tail"]["hair_type"] ).to eq("braided")
       end
     end # it
 
