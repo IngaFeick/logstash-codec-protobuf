@@ -140,8 +140,15 @@ class LogStash::Codecs::Protobuf < LogStash::Codecs::Base
   # Instruct the encoder to attempt converting data types to match the protobuf definitions. Available only for protobuf version 3.
   config :pb3_encoder_autoconvert_types, :validate => :boolean, :default => true, :required => false
 
-  # Add meta information about oneof fields to
-  # For more information see https://developers.google.com/protocol-buffers/docs/proto3#oneof
+  # Add meta information to `[@metadata][pb_oneof]` about which classes were chosen for [oneof](https://developers.google.com/protocol-buffers/docs/proto3#oneof) fields.
+  # Example values: for the protobuf definition
+  # ```    oneof :horse_type do
+  #          optional :unicorn, :message, 2, "FantasyUnicorn"
+  #          optional :pegasus, :message, 3, "FantasyPegasus"
+  #        end
+  # ```
+  # the field `[@metadata][pb_oneof][horse_type]` will be set to either `pegasus` or `unicorn`.
+  # Available only for protobuf version 3.
   config :pb3_set_oneof_metainfo, :validate => :boolean, :default => false, :required => false
 
 
